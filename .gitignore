@@ -1,0 +1,7 @@
+.env
+
+test.py
+scripts/
+
+venv/
+__pycache__/
