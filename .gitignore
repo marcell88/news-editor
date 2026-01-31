@@ -3,7 +3,7 @@
 test.py
 scripts/
 
-ecosystem.system.js
+ecosystem.config.js
 
 venv/
 __pycache__/
