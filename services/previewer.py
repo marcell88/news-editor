@@ -5,6 +5,7 @@ import base64
 import os
 import time
 import aiohttp
+from datetime import datetime
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
@@ -85,11 +86,12 @@ class PreviewerService:
             async with pool.acquire() as conn:
                 # Ищем записи с готовыми текстом и изображением, но еще не отправленные в preview
                 query = """
-                SELECT id, text_prepared, "pic-base64"
+                SELECT id, text_prepared, "pic-base64", time
                 FROM to_publish 
                 WHERE "pic-base64" IS NOT NULL 
                   AND text_prepared IS NOT NULL
                   AND preview = false
+                  AND prepare = true
                   AND LENGTH("pic-base64") > 100
                   AND LENGTH(text_prepared) > 10
                 ORDER BY id ASC
@@ -109,11 +111,12 @@ class PreviewerService:
             record_id = record['id']
             text_prepared = record['text_prepared']
             pic_base64 = record['pic-base64']
+            publish_time = record.get('time')
             
             logger.info(f"📤 Публикация {current}/{total}: ID {record_id}")
             
-            # Добавляем [ID] в текст
-            caption = self._add_record_id_to_caption(text_prepared, record_id)
+            # Добавляем [ID] и время публикации в текст
+            caption = self._add_metadata_to_caption(text_prepared, record_id, publish_time)
             
             # Отправляем в Telegram
             success = await self._send_to_telegram(pic_base64, caption, record_id)
@@ -124,10 +127,34 @@ class PreviewerService:
             logger.error(f"❌ Ошибка публикации записи ID {record['id']}: {e}")
             return False
     
-    def _add_record_id_to_caption(self, caption: str, record_id: int) -> str:
-        """Добавляет [ID] record_id в текст."""
-        # Добавляем ID в конец текста (скобки уже экранированы)
-        return f"{caption}\n\n\\[ID\\] {record_id}"
+    def _format_publish_date(self, unix_timestamp: int) -> str:
+        """Форматирует UNIX-время в строку вида '01.02.2026, 13:23'."""
+        try:
+            if not unix_timestamp:
+                return ""
+            
+            dt = datetime.fromtimestamp(unix_timestamp)
+            return dt.strftime("%d.%m.%Y, %H:%M")
+        except Exception as e:
+            logger.error(f"Ошибка форматирования времени {unix_timestamp}: {e}")
+            return ""
+    
+    def _add_metadata_to_caption(self, caption: str, record_id: int, publish_time: int = None) -> str:
+        """Добавляет [ID] и время публикации в текст."""
+        # Добавляем ID в конец текста
+        result = f"{caption}\n\n\\[ID\\] {record_id}"
+        
+        # Добавляем время публикации, если оно есть
+        if publish_time:
+            formatted_time = self._format_publish_date(publish_time)
+            if formatted_time:
+                # Экранируем специальные символы для MarkdownV2
+                for char in ['.', ',', ':']:
+                    formatted_time = formatted_time.replace(char, f'\\{char}')
+                
+                result += f"\n\n===\n\n{formatted_time}"
+        
+        return result
     
     async def _send_to_telegram(self, pic_base64: str, caption: str, record_id: int) -> bool:
         """Отправляет фото с текстом в Telegram."""
