@@ -8,6 +8,8 @@ import aiohttp
 from datetime import datetime
 from typing import List, Dict, Any
 from dotenv import load_dotenv
+from datetime import datetime
+import pytz
 
 from database.database import Database
 
@@ -128,13 +130,20 @@ class PreviewerService:
             return False
     
     def _format_publish_date(self, unix_timestamp: int) -> str:
-        """Форматирует UNIX-время в строку вида '01.02.2026, 13:23'."""
+        """Форматирует UNIX-время в строку вида '01.02.2026, 13:23' по Москве."""
         try:
             if not unix_timestamp:
                 return ""
             
-            dt = datetime.fromtimestamp(unix_timestamp)
-            return dt.strftime("%d.%m.%Y, %H:%M")
+            # Создаем UTC время
+            utc_dt = datetime.utcfromtimestamp(unix_timestamp)
+            utc_dt = utc_dt.replace(tzinfo=pytz.utc)
+            
+            # Конвертируем в московское время
+            moscow_tz = pytz.timezone('Europe/Moscow')
+            moscow_dt = utc_dt.astimezone(moscow_tz)
+            
+            return moscow_dt.strftime("%d.%m.%Y, %H:%M")
         except Exception as e:
             logger.error(f"Ошибка форматирования времени {unix_timestamp}: {e}")
             return ""
