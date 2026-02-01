@@ -17,11 +17,15 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
-# Конфигурация из .env
+# Конфигурация из .env (все время в UTC!)
 PER_HOUR = int(os.getenv("PER_HOUR", 300))  # Символов в час
-MIN_HOUR = int(os.getenv("MIN", 9))         # Минимальный час публикации
-MAX_HOUR = int(os.getenv("MAX", 21))        # Максимальный час публикации
-PLANNER_CHECK_INTERVAL = int(os.getenv("PLANNER_CHECK_INTERVAL", 60))  # Проверка каждые 60 сек
+MIN_HOUR_MSK = int(os.getenv("MIN", 9))     # Минимальный час публикации по МСК (для удобства)
+MAX_HOUR_MSK = int(os.getenv("MAX", 21))    # Максимальный час публикации по МСК (для удобства)
+PLANNER_CHECK_INTERVAL = int(os.getenv("PLANNER_CHECK_INTERVAL", 60))
+
+# Конвертируем в UTC сразу после загрузки (работаем только в UTC!)
+MIN_HOUR_UTC = MIN_HOUR_MSK - 3  # 9:00 МСК = 6:00 UTC
+MAX_HOUR_UTC = MAX_HOUR_MSK - 3  # 21:00 МСК = 18:00 UTC
 
 class PlannerService:
     """Служба планирования публикаций"""
@@ -33,6 +37,8 @@ class PlannerService:
         """Основной цикл мониторинга"""
         try:
             logger.info("📅 Planner Service запущен")
+            logger.info(f"⏰ Настройки: {MIN_HOUR_UTC}:00-{MAX_HOUR_UTC}:00 UTC "
+                       f"({MIN_HOUR_MSK}:00-{MAX_HOUR_MSK}:00 МСК)")
             
             while True:
                 await self._check_and_plan()
@@ -58,8 +64,8 @@ class PlannerService:
             # 2. Рассчитываем время следующей публикации и целевой час для Timer
             next_unix_time, target_hour = await self._calculate_next_publish_time_and_hour(pool)
             
-            logger.info(f"🎯 Время следующей публикации: {next_unix_time} ({datetime.fromtimestamp(next_unix_time)})")
-            logger.info(f"🎯 Целевой час для Timer: {target_hour}")
+            logger.info(f"🎯 Время следующей публикации: {next_unix_time} ({datetime.fromtimestamp(next_unix_time)} UTC)")
+            logger.info(f"🎯 Целевой час для Timer: {target_hour}:00 UTC")
             
             # 3. Сбрасываем флаги в editor
             await self._reset_editor_flags(pool)
@@ -114,7 +120,7 @@ class PlannerService:
             return False
     
     async def _calculate_next_publish_time_and_hour(self, pool) -> Tuple[int, int]:
-        """Рассчитывает UNIX-время следующей публикации и час для Timer"""
+        """Рассчитывает UNIX-время следующей публикации и час для Timer (все в UTC)"""
         try:
             async with pool.acquire() as conn:
                 # Получаем последнюю публикацию
@@ -127,37 +133,35 @@ class PlannerService:
                 row = await conn.fetchrow(query)
                 
                 if not row:
-                    # Если нет публикаций, используем текущее время
-                    now = datetime.now()
-                    current_unix = int(now.timestamp())
-                    current_hour = now.hour
+                    # Если нет публикаций, используем текущее время UTC
+                    now_utc = datetime.utcnow()
+                    current_unix = int(now_utc.timestamp())
+                    current_hour_utc = now_utc.hour
                     
-                    # Проверяем границы для первого поста
-                    if current_hour > MAX_HOUR:
-                        # После MAX - переносим на MIN следующего дня
-                        next_morning = datetime.combine(
-                            now.date() + timedelta(days=1),
-                            time(MIN_HOUR, 0)
-                        )
-                        next_unix = int(next_morning.timestamp())
-                        target_hour = MIN_HOUR
-                    elif current_hour < MIN_HOUR:
-                        # До MIN - переносим на MIN сегодня
-                        this_morning = datetime.combine(
-                            now.date(),
-                            time(MIN_HOUR, 0)
-                        )
-                        next_unix = int(this_morning.timestamp())
-                        target_hour = MIN_HOUR
+                    logger.info(f"📅 Первая публикация: {current_hour_utc}:00 UTC")
+                    
+                    # Проверяем границы по UTC
+                    if current_hour_utc > MAX_HOUR_UTC:
+                        # После MAX по UTC - переносим на MIN следующего дня
+                        next_unix = self._create_utc_time_days_from_now(1, MIN_HOUR_UTC)
+                        target_hour = MIN_HOUR_UTC
+                        logger.info(f"📅 После {MAX_HOUR_UTC}:00 UTC → переносим на {MIN_HOUR_UTC}:00 следующего дня")
+                    elif current_hour_utc < MIN_HOUR_UTC:
+                        # До MIN по UTC - переносим на MIN сегодня
+                        next_unix = self._create_utc_time_days_from_now(0, MIN_HOUR_UTC)
+                        target_hour = MIN_HOUR_UTC
+                        logger.info(f"📅 До {MIN_HOUR_UTC}:00 UTC → переносим на {MIN_HOUR_UTC}:00 сегодня")
                     else:
-                        # В пределах MIN-MAX - оставляем как есть
+                        # В пределах MIN-MAX по UTC - оставляем как есть
                         next_unix = current_unix
-                        target_hour = current_hour
+                        target_hour = current_hour_utc
+                        logger.info(f"📅 В пределах {MIN_HOUR_UTC}:00-{MAX_HOUR_UTC}:00 UTC → оставляем текущее время")
                     
-                    logger.info(f"📅 Первая публикация: hour={current_hour}, next_unix={next_unix}, target_hour={target_hour}")
+                    logger.info(f"📅 Результат: next_unix={next_unix} ({datetime.fromtimestamp(next_unix)} UTC), "
+                               f"target_hour={target_hour}:00 UTC")
                     return next_unix, target_hour
                 
-                last_published = row['published']  # UNIX-время
+                last_published = row['published']  # UNIX-время (UTC)
                 length = row['length'] or 300  # Длина поста в символах
                 
                 # Базовый расчет времени следующей публикации
@@ -165,98 +169,87 @@ class PlannerService:
                 seconds_until_next = int(hours_until_next * 3600)
                 next_unix_time = last_published + seconds_until_next
                 
+                # Получаем час UTC
+                last_hour_utc = self._get_utc_hour_from_unix(last_published)
+                next_hour_utc = self._get_utc_hour_from_unix(next_unix_time)
+                
                 logger.info(f"📅 Базовый расчет:")
-                logger.info(f"  last_published: {last_published} ({datetime.fromtimestamp(last_published)})")
+                logger.info(f"  last_published: {last_published} ({datetime.fromtimestamp(last_published)} UTC)")
+                logger.info(f"  last_hour: {last_hour_utc}:00 UTC")
                 logger.info(f"  length: {length} символов, PER_HOUR: {PER_HOUR} симв/час")
-                logger.info(f"  hours_until_next: {hours_until_next:.2f}ч, seconds_until_next: {seconds_until_next}с")
-                logger.info(f"  next_unix_time: {next_unix_time} ({datetime.fromtimestamp(next_unix_time)})")
+                logger.info(f"  hours_until_next: {hours_until_next:.2f}ч")
+                logger.info(f"  next_unix_time: {next_unix_time} ({datetime.fromtimestamp(next_unix_time)} UTC)")
+                logger.info(f"  next_hour: {next_hour_utc}:00 UTC")
                 
-                # Определяем окно относительно последней публикации
-                last_datetime = datetime.fromtimestamp(last_published)
-                window_start, window_end = self._get_window_for_datetime(last_datetime)
-                
-                logger.info(f"📅 Окно для последней публикации ({last_datetime}):")
-                logger.info(f"  window_start: {window_start}")
-                logger.info(f"  window_end: {window_end}")
-                
-                # Проверяем где была последняя публикация
-                last_was_in_window = window_start <= last_datetime <= window_end
-                next_datetime = datetime.fromtimestamp(next_unix_time)
-                next_in_window = window_start <= next_datetime <= window_end
-                
-                logger.info(f"📅 Положение публикаций:")
-                logger.info(f"  last_was_in_window: {last_was_in_window}")
-                logger.info(f"  next_in_window: {next_in_window}")
-                
-                # Применяем правила
-                final_unix_time = next_unix_time
-                
-                if last_was_in_window and next_in_window:
-                    # Обе в окне → переносим на MIN следующего дня
-                    publish_date = window_end.date()
-                    publish_time = datetime.combine(publish_date, time(MIN_HOUR, 0))
-                    final_unix_time = int(publish_time.timestamp())
-                    logger.info(f"🎯 Правило 1: обе в окне → переносим на {publish_time}")
-                    
-                elif not last_was_in_window and next_in_window:
-                    # Разовый ночной залет → оставляем как есть
-                    logger.info(f"🎯 Правило 2: разовый ночной залет → оставляем {next_datetime}")
-                    # final_unix_time уже = next_unix_time
-                    
-                elif next_datetime.hour < MIN_HOUR and not next_in_window:
-                    # Ранняя пташка (до MIN но не в окне) → переносим на MIN того же дня
-                    publish_date = next_datetime.date()
-                    publish_time = datetime.combine(publish_date, time(MIN_HOUR, 0))
-                    final_unix_time = int(publish_time.timestamp())
-                    logger.info(f"🎯 Правило 3: ранняя пташка → переносим на {publish_time}")
-                    
+                # Упрощенная логика: просто проверяем попадание в рабочие часы
+                if MIN_HOUR_UTC <= next_hour_utc <= MAX_HOUR_UTC:
+                    # В рабочее время - оставляем как есть
+                    final_unix_time = next_unix_time
+                    logger.info(f"🎯 Время в рабочих часах ({MIN_HOUR_UTC}:00-{MAX_HOUR_UTC}:00 UTC) → оставляем")
                 else:
-                    # Все остальное → оставляем как есть
-                    logger.info(f"🎯 Правило 4: все остальное → оставляем {next_datetime}")
-                    # final_unix_time уже = next_unix_time
+                    # Вне рабочих часов - переносим на MIN
+                    if next_hour_utc < MIN_HOUR_UTC:
+                        # До MIN сегодня - переносим на MIN сегодня
+                        next_datetime_utc = datetime.fromtimestamp(next_unix_time)
+                        days_to_add = 0
+                        logger.info(f"🎯 До {MIN_HOUR_UTC}:00 UTC → переносим на {MIN_HOUR_UTC}:00 сегодня")
+                    else:
+                        # После MAX - переносим на MIN следующего дня
+                        next_datetime_utc = datetime.fromtimestamp(next_unix_time)
+                        days_to_add = 1
+                        logger.info(f"🎯 После {MAX_HOUR_UTC}:00 UTC → переносим на {MIN_HOUR_UTC}:00 следующего дня")
+                    
+                    # Создаем время для MIN часа
+                    final_unix_time = self._create_utc_time_for_datetime(
+                        next_datetime_utc, days_to_add, MIN_HOUR_UTC
+                    )
                 
-                # Из финального UNIX-времени получаем час для Timer
-                final_datetime = datetime.fromtimestamp(final_unix_time)
-                target_hour = final_datetime.hour
+                # Получаем финальный час UTC для Timer
+                final_hour_utc = self._get_utc_hour_from_unix(final_unix_time)
                 
-                logger.info(f"🎯 Итог: final_unix_time={final_unix_time} ({final_datetime}), target_hour={target_hour}")
+                logger.info(f"🎯 Итог:")
+                logger.info(f"  final_unix_time: {final_unix_time} ({datetime.fromtimestamp(final_unix_time)} UTC)")
+                logger.info(f"  final_hour: {final_hour_utc}:00 UTC")
+                logger.info(f"  target_hour: {final_hour_utc} (по UTC для Timer)")
                 
-                return final_unix_time, target_hour
+                return final_unix_time, final_hour_utc
                 
         except Exception as e:
             logger.error(f"❌ Ошибка при расчете времени публикации: {e}")
             # В случае ошибки используем текущее время
-            now = datetime.now()
-            current_unix = int(now.timestamp())
-            current_hour = now.hour
-            return current_unix, current_hour
+            now_utc = datetime.utcnow()
+            current_unix = int(now_utc.timestamp())
+            current_hour_utc = now_utc.hour
+            return current_unix, current_hour_utc
     
-    def _get_window_for_datetime(self, dt: datetime) -> Tuple[datetime, datetime]:
-        """Определяет окно (MAX-следующий MIN) для заданного datetime"""
-        if dt.hour < MIN_HOUR:
-            # Время в "закрытом окне" (ночью/рано утром)
-            # Окно: предыдущий день MAX - сегодня MIN
-            window_start = datetime.combine(
-                dt.date() - timedelta(days=1),
-                time(MAX_HOUR, 0)
-            )
-            window_end = datetime.combine(
-                dt.date(),
-                time(MIN_HOUR, 0)
-            )
-        else:
-            # Время в "дневное время"
-            # Окно: сегодня MAX - завтра MIN
-            window_start = datetime.combine(
-                dt.date(),
-                time(MAX_HOUR, 0)
-            )
-            window_end = datetime.combine(
-                dt.date() + timedelta(days=1),
-                time(MIN_HOUR, 0)
-            )
+    def _get_utc_hour_from_unix(self, unix_time: int) -> int:
+        """Получает час UTC из UNIX-времени"""
+        return (unix_time // 3600) % 24
+    
+    def _create_utc_time_days_from_now(self, days: int, hour_utc: int) -> int:
+        """Создает UNIX-время для hour_utc:00 через N дней от сейчас в UTC"""
+        # Текущее время UTC
+        now_utc = datetime.utcnow()
         
-        return window_start, window_end
+        # Определяем целевую дату
+        target_date = now_utc.date() + timedelta(days=days)
+        
+        # Создаем datetime для целевого часа
+        target_datetime = datetime.combine(target_date, time(hour_utc, 0))
+        
+        # Возвращаем UNIX время
+        return int(target_datetime.timestamp())
+    
+    def _create_utc_time_for_datetime(self, dt_utc: datetime, days_to_add: int, hour_utc: int) -> int:
+        """Создает UNIX-время для hour_utc:00 на основе datetime UTC"""
+        # Определяем целевую дату
+        target_date = dt_utc.date() + timedelta(days=days_to_add)
+        
+        # Создаем datetime для целевого часа
+        target_datetime = datetime.combine(target_date, time(hour_utc, 0))
+        
+        # Возвращаем UNIX время
+        return int(target_datetime.timestamp())
     
     async def _reset_editor_flags(self, pool):
         """Сбрасывает флаги mt, time, analyzed в таблице editor"""
@@ -288,8 +281,8 @@ class PlannerService:
             # Небольшая пауза перед Timer
             await asyncio.sleep(5)
             
-            # 2. Запускаем Timer с целевым часом
-            logger.info(f"🚀 Запуск Timer Service с target_hour={target_hour}...")
+            # 2. Запускаем Timer с целевым часом (target_hour уже по UTC!)
+            logger.info(f"🚀 Запуск Timer Service с target_hour={target_hour}:00 UTC...")
             timer_service = TimerService(target_hour=target_hour)
             await timer_service.run_analysis()
             logger.info("✅ Timer Service завершен")
@@ -370,8 +363,12 @@ class PlannerService:
                     publish_time
                 )
                 
-                publish_datetime = datetime.fromtimestamp(publish_time)
-                logger.info(f"📝 Создана запись в to_publish: time={publish_time} ({publish_datetime})")
+                publish_datetime_utc = datetime.fromtimestamp(publish_time)
+                publish_hour_utc = publish_datetime_utc.hour
+                
+                logger.info(f"📝 Создана запись в to_publish:")
+                logger.info(f"  time: {publish_time} ({publish_datetime_utc} UTC)")
+                logger.info(f"  час: {publish_hour_utc}:00 UTC")
                 
                 # 3. Удаляем запись из editor
                 delete_query = "DELETE FROM editor WHERE id = $1"
