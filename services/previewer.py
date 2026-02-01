@@ -139,6 +139,19 @@ class PreviewerService:
             logger.error(f"Ошибка форматирования времени {unix_timestamp}: {e}")
             return ""
     
+    def _escape_markdown(self, text: str) -> str:
+        """Экранирует специальные символы для Markdown V2."""
+        if not text:
+            return ""
+        
+        special_chars = ['\\', '_', '*', '[', ']', '(', ')', '~', '`',
+                        '>', '<', '&', '#', '+', '-', '=', '|', '{',
+                        '}', '.', '!', ',', ':']
+        
+        for char in special_chars:
+            text = text.replace(char, f'\\{char}')
+        return text
+    
     def _add_metadata_to_caption(self, caption: str, record_id: int, publish_time: int = None) -> str:
         """Добавляет [ID] и время публикации в текст."""
         # Добавляем ID в конец текста
@@ -148,14 +161,11 @@ class PreviewerService:
         if publish_time:
             formatted_time = self._format_publish_date(publish_time)
             if formatted_time:
-                # Экранируем специальные символы для MarkdownV2
-                for char in ['.', ',', ':']:
-                    formatted_time = formatted_time.replace(char, f'\\{char}')
-                
-                result += f"\n\n===\n\n{formatted_time}"
+                escaped_time = self._escape_markdown(formatted_time)
+                result += f"\n\n\\=\\=\\=\n\n{escaped_time}"
         
         return result
-    
+        
     async def _send_to_telegram(self, pic_base64: str, caption: str, record_id: int) -> bool:
         """Отправляет фото с текстом в Telegram."""
         try:
