@@ -176,7 +176,7 @@ class PreviewerService:
         # Добавляем final_score, если он есть
         if final_score is not None:
             # Округляем до десятков
-            rounded_score = round(final_score, -1)
+            rounded_score = round(final_score, 1)
             # Экранируем для Markdown V2
             escaped_score = self._escape_markdown(f"{rounded_score}")
             result += f"\n\n\\=\\=\\=\n\nОценка\\: {escaped_score}"
