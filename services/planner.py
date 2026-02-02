@@ -332,9 +332,9 @@ class PlannerService:
         """Перемещает запись из editor в to_publish с заданным временем"""
         try:
             async with pool.acquire() as conn:
-                # 1. Получаем данные из editor
+                # 1. Получаем данные из editor (ДОБАВИЛ final_score)
                 select_query = """
-                SELECT text, mood, topic, names, author, length
+                SELECT text, mood, topic, names, author, length, final_score
                 FROM editor 
                 WHERE id = $1
                 """
@@ -345,11 +345,11 @@ class PlannerService:
                     logger.error(f"❌ Запись ID {record_id} не найдена в editor")
                     return
                 
-                # 2. Создаем запись в to_publish
+                # 2. Создаем запись в to_publish (ДОБАВИЛ final_score)
                 insert_query = """
                 INSERT INTO to_publish 
-                (text, mood, topic, names, author, length, time)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (text, mood, topic, names, author, length, time, final_score)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """
                 
                 await conn.execute(
@@ -360,7 +360,8 @@ class PlannerService:
                     editor_row['names'],
                     editor_row['author'],
                     editor_row['length'],
-                    publish_time
+                    publish_time,
+                    editor_row['final_score']  # ДОБАВИЛ final_score
                 )
                 
                 publish_datetime_utc = datetime.fromtimestamp(publish_time)
@@ -369,6 +370,7 @@ class PlannerService:
                 logger.info(f"📝 Создана запись в to_publish:")
                 logger.info(f"  time: {publish_time} ({publish_datetime_utc} UTC)")
                 logger.info(f"  час: {publish_hour_utc}:00 UTC")
+                logger.info(f"  final_score: {editor_row['final_score']}")
                 
                 # 3. Удаляем запись из editor
                 delete_query = "DELETE FROM editor WHERE id = $1"
