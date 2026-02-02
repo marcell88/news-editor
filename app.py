@@ -157,7 +157,7 @@ class ServiceManager:
         """Запускает службу обновления state."""
         try:
             logging.info(f"🚀 Запуск службы {name}...")
-            await self.services["lt_state_updater"].run_periodic()
+            await self.services["lt_state_updater"].run_periodic_check()
         except asyncio.CancelledError:
             logging.info(f"Служба {name} остановлена")
         except Exception as e:
