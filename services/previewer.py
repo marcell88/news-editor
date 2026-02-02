@@ -88,7 +88,7 @@ class PreviewerService:
             async with pool.acquire() as conn:
                 # Ищем записи с готовыми текстом и изображением, но еще не отправленные в preview
                 query = """
-                SELECT id, text_prepared, "pic-base64", time
+                SELECT id, text_prepared, "pic-base64", time, final_score
                 FROM to_publish 
                 WHERE "pic-base64" IS NOT NULL 
                   AND text_prepared IS NOT NULL
@@ -114,11 +114,17 @@ class PreviewerService:
             text_prepared = record['text_prepared']
             pic_base64 = record['pic-base64']
             publish_time = record.get('time')
+            final_score = record.get('final_score')  # Получаем final_score
             
             logger.info(f"📤 Публикация {current}/{total}: ID {record_id}")
             
             # Добавляем [ID] и время публикации в текст
-            caption = self._add_metadata_to_caption(text_prepared, record_id, publish_time)
+            caption = self._add_metadata_to_caption(
+                text_prepared, 
+                record_id, 
+                publish_time,
+                final_score  # Передаем final_score
+            )
             
             # Отправляем в Telegram
             success = await self._send_to_telegram(pic_base64, caption, record_id)
@@ -161,17 +167,29 @@ class PreviewerService:
             text = text.replace(char, f'\\{char}')
         return text
     
-    def _add_metadata_to_caption(self, caption: str, record_id: int, publish_time: int = None) -> str:
-        """Добавляет [ID] и время публикации в текст."""
+    def _add_metadata_to_caption(self, caption: str, record_id: int, 
+                                 publish_time: int = None, final_score: float = None) -> str:
+        """Добавляет [ID], final_score и время публикации в текст."""
         # Добавляем ID в конец текста
         result = f"{caption}\n\n\\[ID\\] {record_id}"
+        
+        # Добавляем final_score, если он есть
+        if final_score is not None:
+            # Округляем до десятков
+            rounded_score = round(final_score, -1)
+            # Экранируем для Markdown V2
+            escaped_score = self._escape_markdown(f"{rounded_score}")
+            result += f"\n\n\\=\\=\\=\n\nОценка\\: {escaped_score}"
         
         # Добавляем время публикации, если оно есть
         if publish_time:
             formatted_time = self._format_publish_date(publish_time)
             if formatted_time:
                 escaped_time = self._escape_markdown(formatted_time)
-                result += f"\n\n\\=\\=\\=\n\n{escaped_time}"
+                if final_score is not None:
+                    result += f"\n\n{escaped_time}"
+                else:
+                    result += f"\n\n\\=\\=\\=\n\n{escaped_time}"
         
         return result
         
