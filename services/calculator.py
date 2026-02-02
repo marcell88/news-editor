@@ -10,15 +10,14 @@ from database.database import Database
 logger = logging.getLogger(__name__)
 load_dotenv()
 
-# Веса оценок (сумма = 1.0)
 WEIGHTS = {
-    "lt_topic": 0.15,
-    "lt_mood": 0.15,
-    "mt_topic": 0.15,
-    "mt_mood": 0.15,
-    "mt_author": 0.15,
-    "time_best": 0.20,
-    "time_expire": 0.05,
+    "lt_topic": float(os.getenv("LT_TOPIC_WEIGHT", "0.15")),
+    "lt_mood": float(os.getenv("LT_MOOD_WEIGHT", "0.15")),
+    "mt_topic": float(os.getenv("MT_TOPIC_WEIGHT", "0.15")),
+    "mt_mood": float(os.getenv("MT_MOOD_WEIGHT", "0.15")),
+    "mt_author": float(os.getenv("MT_AUTHOR_WEIGHT", "0.15")),
+    "time_best": float(os.getenv("TIME_BEST_WEIGHT", "0.20")),
+    "time_expire": float(os.getenv("TIME_EXPIRE_WEIGHT", "0.05")),
 }
 
 class CalculatorService:
