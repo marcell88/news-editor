@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import List, Optional, Dict, Any
 import json
 import math
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 class LTStateUpdater:
-    """Служба для обновления LT-данных в таблице state (раз в сутки)"""
+    """Служба для обновления LT-данных в таблице state с периодической проверкой"""
 
     def __init__(self):
         self.lt_posts = int(os.getenv("LT_POSTS", 50))
@@ -38,44 +39,104 @@ class LTStateUpdater:
         self.update_interval_hours = round(update_interval_hours_raw)
         self.update_interval_seconds = self.update_interval_hours * 3600
         
+        # Интервал проверки БД (проверяем раз в час)
+        self.check_interval_seconds = 3600
+        
         logger.info(f"⚙️ Настройки обновления:")
         logger.info(f"   LT_POSTS: {self.lt_posts}")
         logger.info(f"   PER_HOUR: {self.per_hour}")
         logger.info(f"   MIN: {self.min_hour}, MAX: {self.max_hour}")
         logger.info(f"   Часовой диапазон: {hours_range} часов")
         logger.info(f"   Temp = {self.per_hour} * {hours_range} / 700 = {temp:.2f}")
-        logger.info(f"   Периодичность = {self.lt_posts} / {temp:.2f} * 24 = {update_interval_hours_raw:.2f} часов")
+        logger.info(f"   Периодичность обновления = {self.lt_posts} / {temp:.2f} * 24 = {update_interval_hours_raw:.2f} часов")
         logger.info(f"   Итоговая периодичность: {self.update_interval_hours} часов ({self.update_interval_seconds} секунд)")
+        logger.info(f"   Интервал проверки БД: {self.check_interval_seconds/3600} часов")
 
-    async def run_analysis(self):
-        """Основной метод анализа тем и настроений"""
-        try:
-            logger.info("🚀 Запуск обновления LT-данных в state...")
+    async def run_periodic_check(self):
+        """Основной цикл периодической проверки и обновления"""
+        while True:
+            try:
+                logger.info("🔄 Запуск проверки необходимости обновления LT-данных...")
+                await self._check_and_update()
+            except Exception as e:
+                logger.error(f"❌ Ошибка в цикле проверки: {e}")
             
+            logger.info(f"⏳ Следующая проверка через {self.check_interval_seconds/3600:.1f} часов...")
+            await asyncio.sleep(self.check_interval_seconds)
+
+    async def _check_and_update(self):
+        """Проверяет необходимость обновления и выполняет его при необходимости"""
+        try:
             # 1. Подключаемся к БД
             pool = await Database.get_pool()
             
-            # 2. Получаем темы из последних публикаций
+            # 2. Получаем время последнего обновления
+            last_update_time = await self._get_last_update_time(pool)
+            
+            # 3. Определяем, нужно ли обновлять
+            should_update = await self._should_update(last_update_time)
+            
+            if not should_update:
+                return
+            
+            # 4. Выполняем обновление
+            logger.info("🔄 Начинаем обновление LT-данных...")
+            
+            # 5. Получаем темы и настроения из последних публикаций
             topics = await self._get_recent_topics(pool)
             moods = await self._get_recent_moods(pool)
             
-            # 3. Анализируем темы через DeepSeek API
+            # 6. Анализируем через DeepSeek API
             topic_analysis = await self._analyze_topics(topics) if topics else None
-            
-            # 4. Анализируем настроения через DeepSeek API
             mood_analysis = await self._analyze_moods(moods) if moods else None
             
-            # 5. Сохраняем в таблицу state
+            # 7. Сохраняем анализ в БД с временем обновления
             await self._save_analysis_to_db(pool, topic_analysis, mood_analysis)
             
-            # 6. Сбрасываем флаг lt в таблице editor для повторной оценки
+            # 8. Сбрасываем флаг lt в таблице editor
             await self._reset_editor_lt_flag(pool)
             
             logger.info("✅ Обновление LT-данных успешно завершено")
             
         except Exception as e:
-            logger.error(f"❌ Ошибка при обновлении LT-данных: {e}")
-    
+            logger.error(f"❌ Ошибка при проверке/обновлении: {e}")
+
+    async def _get_last_update_time(self, pool) -> Optional[int]:
+        """Получает время последнего обновления из таблицы state"""
+        try:
+            async with pool.acquire() as conn:
+                query = """
+                SELECT "lt-updated-at"
+                FROM state 
+                ORDER BY id DESC 
+                LIMIT 1
+                """
+                
+                result = await conn.fetchval(query)
+                return result
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка при получении времени обновления: {e}")
+            return None
+
+    async def _should_update(self, last_update_time: Optional[int]) -> bool:
+        """Определяет, нужно ли выполнять обновление"""
+        if last_update_time is None:
+            logger.info("ℹ️ Время последнего обновления не указано, обновляем данные")
+            return True
+        
+        current_time = int(time.time())
+        time_since_last_update = current_time - last_update_time
+        
+        if time_since_last_update >= self.update_interval_seconds:
+            logger.info(f"⏰ Прошло {time_since_last_update/3600:.1f} часов с последнего обновления, пора обновлять")
+            logger.info(f"   Требуемый интервал: {self.update_interval_hours} часов")
+            return True
+        else:
+            hours_until_update = (self.update_interval_seconds - time_since_last_update) / 3600
+            logger.info(f"⏳ До следующего обновления осталось {hours_until_update:.1f} часов")
+            return False
+
     async def _get_recent_topics(self, pool) -> List[str]:
         """Получает темы из последних LT_POSTS публикаций"""
         try:
@@ -107,7 +168,7 @@ class LTStateUpdater:
         except Exception as e:
             logger.error(f"Ошибка при получении тем: {e}")
             return []
-    
+
     async def _get_recent_moods(self, pool) -> List[str]:
         """Получает настроения из последних LT_POSTS публикаций"""
         try:
@@ -139,11 +200,12 @@ class LTStateUpdater:
         except Exception as e:
             logger.error(f"Ошибка при получении настроений: {e}")
             return []
-    
+
     async def _analyze_topics(self, topics: List[str]) -> Optional[List[Dict[str, Any]]]:
         """Анализирует темы через DeepSeek API"""
         try:
             if not topics:
+                logger.warning("Нет тем для анализа")
                 return None
                 
             topics_text = "\n".join([f"- {topic}" for topic in topics])
@@ -168,11 +230,12 @@ class LTStateUpdater:
         except Exception as e:
             logger.error(f"Ошибка анализа тем через DeepSeek: {e}")
             return None
-    
+
     async def _analyze_moods(self, moods: List[str]) -> Optional[List[Dict[str, Any]]]:
         """Анализирует настроения через DeepSeek API"""
         try:
             if not moods:
+                logger.warning("Нет настроений для анализа")
                 return None
                 
             moods_text = "\n".join([f"- {mood}" for mood in moods])
@@ -197,24 +260,25 @@ class LTStateUpdater:
         except Exception as e:
             logger.error(f"Ошибка анализа настроений через DeepSeek: {e}")
             return None
-    
+
     async def _save_analysis_to_db(self, pool, topic_categories: Optional[List[Dict[str, Any]]], 
                                   mood_categories: Optional[List[Dict[str, Any]]]):
-        """Сохраняет анализ тем и настроений в таблицу state"""
+        """Сохраняет анализ тем и настроений в таблицу state с временем обновления"""
         try:
+            current_time = int(time.time())
             async with pool.acquire() as conn:
                 check_query = "SELECT COUNT(*) as count FROM state"
                 count_result = await conn.fetchval(check_query)
                 
                 if count_result == 0:
-                    await self._create_new_record(conn, topic_categories, mood_categories)
+                    await self._create_new_record(conn, topic_categories, mood_categories, current_time)
                 else:
-                    await self._update_existing_record(conn, topic_categories, mood_categories)
+                    await self._update_existing_record(conn, topic_categories, mood_categories, current_time)
                     
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения анализа в БД: {e}")
-    
-    async def _create_new_record(self, conn, topic_categories, mood_categories):
+
+    async def _create_new_record(self, conn, topic_categories, mood_categories, current_time):
         """Создает новую запись в таблице state"""
         lt_topic_array = None
         if topic_categories:
@@ -230,29 +294,34 @@ class LTStateUpdater:
         
         if lt_topic_array and lt_mood_array:
             insert_query = """
-            INSERT INTO state ("lt-topic", "lt-mood")
-            VALUES ($1, $2)
+            INSERT INTO state ("lt-topic", "lt-mood", "lt-updated-at")
+            VALUES ($1, $2, $3)
             """
-            await conn.execute(insert_query, lt_topic_array, lt_mood_array)
+            await conn.execute(insert_query, lt_topic_array, lt_mood_array, current_time)
         elif lt_topic_array:
             insert_query = """
-            INSERT INTO state ("lt-topic")
-            VALUES ($1)
+            INSERT INTO state ("lt-topic", "lt-updated-at")
+            VALUES ($1, $2)
             """
-            await conn.execute(insert_query, lt_topic_array)
+            await conn.execute(insert_query, lt_topic_array, current_time)
         elif lt_mood_array:
             insert_query = """
-            INSERT INTO state ("lt-mood")
+            INSERT INTO state ("lt-mood", "lt-updated-at")
+            VALUES ($1, $2)
+            """
+            await conn.execute(insert_query, lt_mood_array, current_time)
+        else:
+            logger.warning("Нет данных для сохранения, создаем пустую запись с временем")
+            insert_query = """
+            INSERT INTO state ("lt-updated-at")
             VALUES ($1)
             """
-            await conn.execute(insert_query, lt_mood_array)
-        else:
-            logger.warning("Нет данных для сохранения")
+            await conn.execute(insert_query, current_time)
             return
             
-        logger.info("✅ Создана новая запись в таблице state")
-    
-    async def _update_existing_record(self, conn, topic_categories, mood_categories):
+        logger.info(f"✅ Создана новая запись в таблице state с временем {current_time}")
+
+    async def _update_existing_record(self, conn, topic_categories, mood_categories, current_time):
         """Обновляет существующую запись в таблице state"""
         update_fields = []
         params = []
@@ -274,9 +343,10 @@ class LTStateUpdater:
             logger.info("😊 Обновление lt-mood:")
             logger.info(json.dumps(mood_categories, ensure_ascii=False, indent=2))
         
-        if not update_fields:
-            logger.warning("Нет данных для обновления")
-            return
+        # Всегда обновляем время
+        update_fields.append(f'"lt-updated-at" = ${param_counter}')
+        params.append(current_time)
+        param_counter += 1
         
         update_query = f"""
         UPDATE state 
@@ -285,13 +355,13 @@ class LTStateUpdater:
         """
         
         await conn.execute(update_query, *params)
-        logger.info("✅ Обновлена запись в таблице state")
+        logger.info(f"✅ Обновлена запись в таблице state с временем {current_time}")
         
         if topic_categories:
             logger.info(f"📊 Сохранено {len(topic_categories)} категорий тем")
         if mood_categories:
             logger.info(f"😊 Сохранено {len(mood_categories)} категорий настроений")
-    
+
     async def _reset_editor_lt_flag(self, pool):
         """Сбрасывает флаг lt в таблице editor для повторной оценки"""
         try:
@@ -307,18 +377,11 @@ class LTStateUpdater:
                 
         except Exception as e:
             logger.error(f"❌ Ошибка при сбросе флага lt в editor: {e}")
-    
-    async def run_periodic(self):
-        """Запускает обновление с рассчитанной периодичностью"""
-        while True:
-            await self.run_analysis()
-            logger.info(f"⏰ Следующее обновление через {self.update_interval_hours} часов ({self.update_interval_seconds} секунд)...")
-            await asyncio.sleep(self.update_interval_seconds)
 
 async def main():
     """Основная функция службы"""
     updater = LTStateUpdater()
-    await updater.run_periodic()  # вместо run_daily()
+    await updater.run_periodic_check()
 
 if __name__ == "__main__":
     logging.basicConfig(
