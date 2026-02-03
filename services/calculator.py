@@ -8,66 +8,74 @@ from dotenv import load_dotenv
 from database.database import Database
 
 logger = logging.getLogger(__name__)
-load_dotenv()
 
-# Добавим логирование загрузки .env
-env_path = '.env'
-logger.info(f"Пытаемся загрузить .env из: {os.path.abspath(env_path)}")
-logger.info(f"Файл .env существует: {os.path.exists(env_path)}")
-
-# Выведем все переменные из .env для отладки
-if os.path.exists(env_path):
-    with open(env_path, 'r') as f:
-        env_content = f.read()
-    logger.info(f"Содержимое .env:\n{env_content}")
-
-# Пробуем получить каждую переменную по отдельности и логируем
-lt_topic_val = os.getenv("LT_TOPIC_WEIGHT")
-lt_mood_val = os.getenv("LT_MOOD_WEIGHT")
-mt_topic_val = os.getenv("MT_TOPIC_WEIGHT")
-mt_mood_val = os.getenv("MT_MOOD_WEIGHT")
-mt_author_val = os.getenv("MT_AUTHOR_WEIGHT")
-time_best_val = os.getenv("TIME_BEST_WEIGHT")
-time_expire_val = os.getenv("TIME_EXPIRE_WEIGHT")
-
-logger.info(f"LT_TOPIC_WEIGHT из env: '{lt_topic_val}' (тип: {type(lt_topic_val)})")
-logger.info(f"LT_MOOD_WEIGHT из env: '{lt_mood_val}'")
-logger.info(f"MT_TOPIC_WEIGHT из env: '{mt_topic_val}'")
-logger.info(f"MT_MOOD_WEIGHT из env: '{mt_mood_val}'")
-logger.info(f"MT_AUTHOR_WEIGHT из env: '{mt_author_val}'")
-logger.info(f"TIME_BEST_WEIGHT из env: '{time_best_val}'")
-logger.info(f"TIME_EXPIRE_WEIGHT из env: '{time_expire_val}'")
-
-# Список всех переменных окружения для отладки
-all_env_vars = os.environ.keys()
-weight_vars = [var for var in all_env_vars if 'WEIGHT' in var.upper()]
-logger.info(f"Все переменные с 'WEIGHT' в системе: {weight_vars}")
-
-WEIGHTS = {
-    "lt_topic": float(os.getenv("LT_TOPIC_WEIGHT", "0.15")),
-    "lt_mood": float(os.getenv("LT_MOOD_WEIGHT", "0.15")),
-    "mt_topic": float(os.getenv("MT_TOPIC_WEIGHT", "0.15")),
-    "mt_mood": float(os.getenv("MT_MOOD_WEIGHT", "0.15")),
-    "mt_author": float(os.getenv("MT_AUTHOR_WEIGHT", "0.15")),
-    "time_best": float(os.getenv("TIME_BEST_WEIGHT", "0.20")),
-    "time_expire": float(os.getenv("TIME_EXPIRE_WEIGHT", "0.05")),
-}
-
-# Логируем итоговые веса
-logger.info("Итоговые веса:")
-for key, value in WEIGHTS.items():
-    logger.info(f"  {key}: {value}")
-
-# Проверяем сумму весов
-total_weight = sum(WEIGHTS.values())
-logger.info(f"Сумма всех весов: {total_weight:.2f}")
-if abs(total_weight - 1.0) > 0.001:
-    logger.warning(f"Внимание! Сумма весов ({total_weight:.2f}) не равна 1.0")
+# Перенесем инициализацию весов в метод инициализации класса
+# чтобы она происходила при создании экземпляра, а не при импорте
 
 class CalculatorService:
     def __init__(self):
         self.check_interval = 5
+        self.weights = {}
+        self._initialize_weights()
         
+    def _initialize_weights(self):
+        """Инициализирует веса из переменных окружения"""
+        # Сначала попробуем загрузить .env
+        load_dotenv()
+        
+        # Логируем процесс загрузки
+        env_path = '.env'
+        logger.info(f"🔄 CalculatorService: Загружаем .env из {os.path.abspath(env_path)}")
+        
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                env_content = f.read()
+            logger.debug(f"CalculatorService: Содержимое .env:\n{env_content}")
+        
+        # Пробуем получить каждую переменную
+        lt_topic_val = os.getenv("LT_TOPIC_WEIGHT")
+        lt_mood_val = os.getenv("LT_MOOD_WEIGHT")
+        mt_topic_val = os.getenv("MT_TOPIC_WEIGHT")
+        mt_mood_val = os.getenv("MT_MOOD_WEIGHT")
+        mt_author_val = os.getenv("MT_AUTHOR_WEIGHT")
+        time_best_val = os.getenv("TIME_BEST_WEIGHT")
+        time_expire_val = os.getenv("TIME_EXPIRE_WEIGHT")
+        
+        logger.info("CalculatorService: Значения из переменных окружения:")
+        logger.info(f"  LT_TOPIC_WEIGHT: '{lt_topic_val}'")
+        logger.info(f"  LT_MOOD_WEIGHT: '{lt_mood_val}'")
+        logger.info(f"  MT_TOPIC_WEIGHT: '{mt_topic_val}'")
+        logger.info(f"  MT_MOOD_WEIGHT: '{mt_mood_val}'")
+        logger.info(f"  MT_AUTHOR_WEIGHT: '{mt_author_val}'")
+        logger.info(f"  TIME_BEST_WEIGHT: '{time_best_val}'")
+        logger.info(f"  TIME_EXPIRE_WEIGHT: '{time_expire_val}'")
+        
+        # Выводим все переменные окружения для отладки
+        all_env_vars = dict(os.environ)
+        logger.debug(f"CalculatorService: Все переменные окружения: {all_env_vars}")
+        
+        # Устанавливаем веса с значениями по умолчанию
+        self.weights = {
+            "lt_topic": float(lt_topic_val) if lt_topic_val else 0.15,
+            "lt_mood": float(lt_mood_val) if lt_mood_val else 0.15,
+            "mt_topic": float(mt_topic_val) if mt_topic_val else 0.15,
+            "mt_mood": float(mt_mood_val) if mt_mood_val else 0.15,
+            "mt_author": float(mt_author_val) if mt_author_val else 0.15,
+            "time_best": float(time_best_val) if time_best_val else 0.20,
+            "time_expire": float(time_expire_val) if time_expire_val else 0.05,
+        }
+        
+        # Логируем итоговые веса
+        logger.info("CalculatorService: Итоговые веса:")
+        for key, value in self.weights.items():
+            logger.info(f"  {key}: {value}")
+        
+        # Проверяем сумму весов
+        total_weight = sum(self.weights.values())
+        logger.info(f"CalculatorService: Сумма всех весов: {total_weight:.2f}")
+        if abs(total_weight - 1.0) > 0.001:
+            logger.warning(f"CalculatorService: Внимание! Сумма весов ({total_weight:.2f}) не равна 1.0")
+    
     async def run_monitoring(self):
         try:
             logger.info("🧮 Calculator Service запущен")
@@ -133,11 +141,11 @@ class CalculatorService:
             logger.debug(f"Расчет для ID {record['id']}:")
             for key, value in record.items():
                 if key != 'id':
-                    logger.debug(f"  {key}: {value} (тип: {type(value)})")
+                    logger.debug(f"  {key}: {value}")
             
             # Собираем оценки
             scores = {}
-            for key in WEIGHTS.keys():
+            for key in self.weights.keys():
                 db_key = key.replace('_', '-')
                 value = record.get(db_key)
                 
@@ -157,7 +165,7 @@ class CalculatorService:
             valid = {}
             invalid_weight = 0.0
             
-            for key, weight in WEIGHTS.items():
+            for key, weight in self.weights.items():
                 score = scores.get(key)
                 if score is not None and score > 0:
                     valid[key] = {'score': score, 'weight': weight}
@@ -217,12 +225,13 @@ class CalculatorService:
             raise
 
 async def main():
-    calculator = CalculatorService()
-    await calculator.run_monitoring()
-
-if __name__ == "__main__":
+    # Настройка логирования при запуске напрямую
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+    calculator = CalculatorService()
+    await calculator.run_monitoring()
+
+if __name__ == "__main__":
     asyncio.run(main())
