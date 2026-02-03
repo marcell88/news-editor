@@ -33,7 +33,7 @@ class LTStateUpdater:
         temp = self.per_hour * hours_range / 700
         
         # Рассчитываем периодичность: LT_POSTS / temp * 24
-        update_interval_hours_raw = (self.lt_posts / temp) * 24
+        update_interval_hours_raw = (self.lt_posts / temp) * 24 / 10
         
         # Округляем до целого
         self.update_interval_hours = round(update_interval_hours_raw)
