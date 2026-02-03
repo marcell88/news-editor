@@ -13,7 +13,7 @@ class CalculatorService:
     def __init__(self):
         self.check_interval = 5
         self.weights = {}
-        self._initialize_weights()
+        # НЕ вызываем _initialize_weights() здесь
         
     def _initialize_weights(self):
         """Инициализирует веса из переменных окружения"""
@@ -75,6 +75,9 @@ class CalculatorService:
     
     async def run_monitoring(self):
         try:
+            # Инициализируем веса здесь, когда служба уже запущена
+            self._initialize_weights()
+            
             logger.info("🧮 Calculator Service запущен")
             
             while True:
