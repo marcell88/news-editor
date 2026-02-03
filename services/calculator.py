@@ -9,9 +9,6 @@ from database.database import Database
 
 logger = logging.getLogger(__name__)
 
-# Перенесем инициализацию весов в метод инициализации класса
-# чтобы она происходила при создании экземпляра, а не при импорте
-
 class CalculatorService:
     def __init__(self):
         self.check_interval = 5
@@ -125,26 +122,36 @@ class CalculatorService:
         calculated = 0
         for record in records:
             try:
+                logger.info("=" * 60)
+                logger.info(f"📊 Начинаем расчет для ID {record['id']}")
                 final_score = self._calculate_score(record)
                 await self._update_record(pool, record['id'], final_score)
                 calculated += 1
+                logger.info(f"✅ Завершен расчет ID {record['id']}: итоговая оценка = {final_score:.2f}")
             except Exception as e:
-                logger.error(f"Ошибка расчета ID {record['id']}: {e}")
+                logger.error(f"❌ Ошибка расчета ID {record['id']}: {e}")
         
         if calculated:
-            logger.info(f"✅ Рассчитано {calculated} оценок")
+            logger.info(f"✅ Всего рассчитано {calculated} оценок")
     
     def _calculate_score(self, record: Dict) -> float:
         """Рассчитывает итоговую оценку"""
         try:
-            # Логируем входные данные для отладки
-            logger.debug(f"Расчет для ID {record['id']}:")
-            for key, value in record.items():
-                if key != 'id':
-                    logger.debug(f"  {key}: {value}")
+            record_id = record.get('id', 'unknown')
             
-            # Собираем оценки
+            # Шаг 1: Выводим все исходные данные
+            logger.info(f"📋 Исходные данные для ID {record_id}:")
+            logger.info(f"  lt-topic: {record.get('lt-topic')}")
+            logger.info(f"  lt-mood: {record.get('lt-mood')}")
+            logger.info(f"  mt-topic: {record.get('mt-topic')}")
+            logger.info(f"  mt-mood: {record.get('mt-mood')}")
+            logger.info(f"  mt-author: {record.get('mt-author')}")
+            logger.info(f"  time-best: {record.get('time-best')}")
+            logger.info(f"  time-expire: {record.get('time-expire')}")
+            
+            # Шаг 2: Собираем оценки
             scores = {}
+            logger.info("📊 Преобразование значений в числа:")
             for key in self.weights.keys():
                 db_key = key.replace('_', '-')
                 value = record.get(db_key)
@@ -153,42 +160,55 @@ class CalculatorService:
                     if value is not None:
                         num = float(value)
                         scores[key] = num
-                        logger.debug(f"  {key} -> {db_key}: {num}")
+                        logger.info(f"  {key} -> {db_key}: {value} -> {num}")
                     else:
                         scores[key] = None
-                        logger.debug(f"  {key} -> {db_key}: None")
+                        logger.info(f"  {key} -> {db_key}: {value} -> None")
                 except Exception as conv_e:
-                    logger.warning(f"  Ошибка конвертации {key} ({value}): {conv_e}")
+                    logger.warning(f"  ❌ Ошибка конвертации {key} ({value}): {conv_e}")
                     scores[key] = None
             
-            # Разделяем валидные (>0) и невалидные
+            # Шаг 3: Разделяем валидные (>0) и невалидные
             valid = {}
             invalid_weight = 0.0
+            invalid_items = []
             
+            logger.info("📈 Анализ валидности оценок:")
             for key, weight in self.weights.items():
                 score = scores.get(key)
                 if score is not None and score > 0:
                     valid[key] = {'score': score, 'weight': weight}
-                    logger.debug(f"  Валидный: {key} = {score}, вес = {weight}")
+                    logger.info(f"  ✅ {key}: оценка={score:.2f}, вес={weight}")
                 else:
                     invalid_weight += weight
-                    logger.debug(f"  Невалидный: {key}, добавляем вес {weight} к invalid_weight")
+                    invalid_items.append(key)
+                    logger.info(f"  ❌ {key}: оценка={score}, вес={weight} -> добавляем к невалидным")
             
-            logger.debug(f"  Всего валидных: {len(valid)}, invalid_weight = {invalid_weight}")
+            logger.info(f"📊 Итоги анализа:")
+            logger.info(f"  Валидные оценки: {len(valid)} шт")
+            logger.info(f"  Невалидные оценки: {len(invalid_items)} шт: {', '.join(invalid_items)}")
+            logger.info(f"  Сумма весов невалидных: {invalid_weight:.2f}")
             
+            # Шаг 4: Проверяем наличие валидных оценок
             if not valid:
-                logger.warning(f"  Нет валидных оценок, возвращаем 5.0")
+                logger.warning(f"⚠️ Нет валидных оценок, возвращаем значение по умолчанию 5.0")
                 return 5.0
             
-            # Перераспределяем веса
+            # Шаг 5: Перераспределяем веса
             if invalid_weight > 0:
                 weight_per_valid = invalid_weight / len(valid)
-                logger.debug(f"  Перераспределяем invalid_weight {invalid_weight} на {len(valid)} валидных = {weight_per_valid} каждый")
-                for data in valid.values():
+                logger.info(f"📐 Перераспределение весов:")
+                logger.info(f"  Общий вес невалидных: {invalid_weight:.2f}")
+                logger.info(f"  Количество валидных: {len(valid)}")
+                logger.info(f"  Дополнительный вес на каждый валидный: {weight_per_valid:.3f}")
+                
+                for key, data in valid.items():
+                    old_weight = data['weight']
                     data['weight'] += weight_per_valid
-                    logger.debug(f"    Новый вес: {data['weight']}")
+                    logger.info(f"  {key}: {old_weight:.3f} -> {data['weight']:.3f} (+{weight_per_valid:.3f})")
             
-            # Рассчитываем
+            # Шаг 6: Рассчитываем
+            logger.info("🧮 Расчет итоговой оценки:")
             total_score = 0.0
             total_weight = 0.0
             
@@ -196,18 +216,39 @@ class CalculatorService:
                 contribution = data['score'] * data['weight']
                 total_score += contribution
                 total_weight += data['weight']
-                logger.debug(f"  {key}: {data['score']} * {data['weight']} = {contribution}")
+                logger.info(f"  {key}: {data['score']:.2f} * {data['weight']:.3f} = {contribution:.3f}")
             
-            logger.debug(f"  Итого: total_score = {total_score}, total_weight = {total_weight}")
+            logger.info(f"📊 Суммы:")
+            logger.info(f"  Сумма взвешенных оценок: {total_score:.3f}")
+            logger.info(f"  Сумма весов: {total_weight:.3f}")
             
-            final = total_score / total_weight if total_weight > 0 else 5.0
-            final = max(1.0, min(10.0, final))
+            # Шаг 7: Финальный расчет
+            if total_weight > 0:
+                final = total_score / total_weight
+                logger.info(f"  Итоговая формула: {total_score:.3f} / {total_weight:.3f} = {final:.3f}")
+            else:
+                logger.warning("⚠️ Сумма весов равна 0, используем значение по умолчанию 5.0")
+                final = 5.0
             
-            logger.info(f"ID {record['id']}: итог {final:.2f}")
-            return final
+            # Шаг 8: Проверяем границы
+            if final < 1.0:
+                logger.info(f"⚠️ Оценка {final:.3f} ниже минимальной (1.0), устанавливаем 1.0")
+                final = 1.0
+            elif final > 10.0:
+                logger.info(f"⚠️ Оценка {final:.3f} выше максимальной (10.0), устанавливаем 10.0")
+                final = 10.0
+            else:
+                logger.info(f"✅ Оценка {final:.3f} в допустимых границах [1.0, 10.0]")
+            
+            # Шаг 9: Округляем
+            final_rounded = round(final, 2)
+            if final_rounded != final:
+                logger.info(f"🔢 Округление: {final:.3f} -> {final_rounded:.2f}")
+            
+            return final_rounded
             
         except Exception as e:
-            logger.error(f"Ошибка расчета: {e}")
+            logger.error(f"❌ Критическая ошибка расчета для ID {record_id}: {e}")
             return 5.0
     
     async def _update_record(self, pool, record_id: int, final_score: float):
@@ -219,9 +260,10 @@ class CalculatorService:
                 SET final_score = $1, analyzed = true
                 WHERE id = $2
                 """
-                await conn.execute(query, round(final_score, 2), record_id)
+                result = await conn.execute(query, round(final_score, 2), record_id)
+                logger.info(f"💾 Сохранение в БД: ID {record_id} = {final_score:.2f}")
         except Exception as e:
-            logger.error(f"Ошибка обновления ID {record_id}: {e}")
+            logger.error(f"❌ Ошибка обновления ID {record_id}: {e}")
             raise
 
 async def main():
