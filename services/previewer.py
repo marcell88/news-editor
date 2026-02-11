@@ -6,10 +6,11 @@ import os
 import time
 import aiohttp
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.database import Database
 
@@ -114,16 +115,16 @@ class PreviewerService:
             text_prepared = record['text_prepared']
             pic_base64 = record['pic-base64']
             publish_time = record.get('time')
-            final_score = record.get('final_score')  # Получаем final_score
+            final_score = record.get('final_score')
             
             logger.info(f"📤 Публикация {current}/{total}: ID {record_id}")
             
-            # Добавляем [ID] и время публикации в текст
+            # Добавляем [ID], final_score и время публикации в текст
             caption = self._add_metadata_to_caption(
                 text_prepared, 
                 record_id, 
                 publish_time,
-                final_score  # Передаем final_score
+                final_score
             )
             
             # Отправляем в Telegram
@@ -192,18 +193,39 @@ class PreviewerService:
                     result += f"\n\n\\=\\=\\=\n\n{escaped_time}"
         
         return result
-        
+    
     async def _send_to_telegram(self, pic_base64: str, caption: str, record_id: int) -> bool:
-        """Отправляет фото с текстом в Telegram."""
+        """Отправляет фото с текстом и двумя кнопками в Telegram."""
         try:
             # Декодируем изображение
             photo_data = base64.b64decode(pic_base64)
+            
+            # Создаем клавиатуру с двумя кнопками в разных рядах
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                # Первая кнопка
+                [
+                    InlineKeyboardButton(
+                        text="🖼 Картинка",
+                        callback_data=f"btn_image_{record_id}"
+                    )
+                ],
+                # Пустой ряд для отступа
+                [],
+                # Вторая кнопка
+                [
+                    InlineKeyboardButton(
+                        text="📄 Пост",
+                        callback_data=f"btn_post_{record_id}"
+                    )
+                ]
+            ])
             
             # Формируем запрос
             form = aiohttp.FormData()
             form.add_field('chat_id', self.preview_group)
             form.add_field('caption', caption)
             form.add_field('parse_mode', 'MarkdownV2')
+            form.add_field('reply_markup', keyboard.model_dump_json())
             form.add_field('photo', photo_data, filename='image.jpg', content_type='image/jpeg')
             
             url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
@@ -215,6 +237,11 @@ class PreviewerService:
                     if response.status == 200 and result.get('ok'):
                         message_id = result['result']['message_id']
                         logger.info(f"✅ Отправлено! ID записи: {record_id}, ID сообщения: {message_id}")
+                        
+                        # 🔥 СОХРАНЯЕМ СВЯЗЬ message_id -> record_id ДЛЯ ПОИСКА ТЕКСТА
+                        # Это понадобится если Telegram не пришлет caption в callback
+                        await self._save_message_mapping(message_id, record_id, caption)
+                        
                         return True
                     else:
                         logger.error(f"❌ Ошибка отправки записи {record_id}: {result}")
@@ -224,15 +251,68 @@ class PreviewerService:
             logger.error(f"❌ Ошибка при отправке в Telegram: {e}")
             return False
     
+    # 🔥 НОВЫЙ МЕТОД: Сохраняем связь message_id -> record_id
+    async def _save_message_mapping(self, message_id: int, record_id: int, caption: str):
+        """Сохраняет соответствие message_id и record_id в БД."""
+        try:
+            pool = await Database.get_pool()
+            async with pool.acquire() as conn:
+                # Создаем таблицу если нет
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS message_mapping (
+                        message_id BIGINT PRIMARY KEY,
+                        record_id INTEGER NOT NULL,
+                        caption TEXT,
+                        created_at INTEGER NOT NULL
+                    )
+                """)
+                
+                current_time = int(time.time())
+                await conn.execute("""
+                    INSERT INTO message_mapping (message_id, record_id, caption, created_at)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (message_id) DO UPDATE 
+                    SET record_id = $2, caption = $3, created_at = $4
+                """, message_id, record_id, caption, current_time)
+                
+                logger.debug(f"💾 Сохранена связь message_id={message_id} -> record_id={record_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения маппинга: {e}")
+    
+    # 🔥 НОВЫЙ МЕТОД: Получаем caption по message_id
+    async def get_caption_by_message_id(self, message_id: int) -> Optional[str]:
+        """Получает текст поста по message_id из БД."""
+        try:
+            pool = await Database.get_pool()
+            async with pool.acquire() as conn:
+                # Сначала ищем в message_mapping
+                row = await conn.fetchrow("""
+                    SELECT caption FROM message_mapping WHERE message_id = $1
+                """, message_id)
+                
+                if row and row['caption']:
+                    return row['caption']
+                
+                # Если нет в mapping, ищем через record_id
+                row = await conn.fetchrow("""
+                    SELECT m.caption FROM message_mapping m
+                    JOIN to_publish t ON t.id = m.record_id
+                    WHERE m.message_id = $1
+                """, message_id)
+                
+                return row['caption'] if row else None
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения caption по message_id {message_id}: {e}")
+            return None
+    
     async def _mark_as_previewed(self, pool, record_id: int):
         """Помечает запись как отправленную в preview и записывает время."""
         try:
-            current_time = int(time.time())  # UNIX время
+            current_time = int(time.time())
             
             async with pool.acquire() as conn:
-                # Проверяем, есть ли столбец previewed_at
                 try:
-                    # Пробуем обновить с previewed_at
                     query = """
                     UPDATE to_publish 
                     SET 
@@ -242,7 +322,6 @@ class PreviewerService:
                     """
                     await conn.execute(query, current_time, record_id)
                 except Exception as e:
-                    # Если столбца нет - обновляем без него
                     logger.warning(f"Столбец previewed_at не найден, обновляем только preview: {e}")
                     query = """
                     UPDATE to_publish 
@@ -251,7 +330,7 @@ class PreviewerService:
                     """
                     await conn.execute(query, record_id)
                 
-                logger.info(f"✅ Запись ID {record_id} помечена как previewed (время: {current_time})")
+                logger.info(f"✅ Запись ID {record_id} помечена как previewed")
                 
         except Exception as e:
             logger.error(f"❌ Ошибка обновления записи ID {record_id}: {e}")
@@ -269,7 +348,6 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # Проверяем .env переменные
     if not os.getenv('PUBLISH_API') or not os.getenv('PREVIEW_GROUP'):
         print("❌ Отсутствуют обязательные переменные в .env:")
         print("   PUBLISH_API=ваш_токен_бота")
