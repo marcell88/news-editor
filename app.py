@@ -33,7 +33,7 @@ ENABLE_PLANNER = True          # Planner Service (планировщик) - по
 ENABLE_PAINTER = True          # Painter Service (генерация изображений) - постоянно
 ENABLE_PREPARATOR = True       # Preparator Service (подготовка текстов) - постоянно
 ENABLE_PREVIEWER = True       # Previewer Service (публикация в preview группу)
-ENABLE_REACTION_MONITOR = True # Reaction Monitor (мониторинг реакций)
+ENABLE_REACTION_MONITOR = False # Reaction Monitor (мониторинг реакций)
 ENABLE_PUBLISHER = True        # Publisher Service (прямая публикация в группу)
 ENABLE_CLEANER = True          # Cleaner Service (очистка БД) - НОВАЯ СЛУЖБА
 # =================================
