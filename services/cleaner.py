@@ -12,6 +12,7 @@ load_dotenv()
 
 # Константы
 CHECK_INTERVAL = 3600  # Проверка каждый час (3600 секунд)
+TO_PUBLISH_DELAY_HOURS = 3  # Задержка перед удалением опубликованных записей (в часах)
 
 class CleanerService:
     """
@@ -119,15 +120,19 @@ class CleanerService:
     async def _clean_to_publish_table(self, pool) -> int:
         """
         Очищает таблицу to_publish.
-        Удаляет строки, где published = true.
+        Удаляет строки, где published = true и прошло минимум TO_PUBLISH_DELAY_HOURS часов с time.
         """
         try:
             async with pool.acquire() as conn:
+                # Текущее UNIX время
+                current_time = int(datetime.now().timestamp())
+                
                 # Сначала считаем сколько удалим
                 count_query = """
-                SELECT COUNT(*) FROM to_publish WHERE published = true
+                SELECT COUNT(*) FROM to_publish 
+                WHERE published = true AND $1 - time >= $2
                 """
-                count = await conn.fetchval(count_query)
+                count = await conn.fetchval(count_query, current_time, TO_PUBLISH_DELAY_HOURS * 3600)
                 
                 if count == 0:
                     logger.debug("✅ В таблице to_publish нет опубликованных записей для удаления")
@@ -137,10 +142,11 @@ class CleanerService:
                 
                 # Удаляем
                 delete_query = """
-                DELETE FROM to_publish WHERE published = true
+                DELETE FROM to_publish 
+                WHERE published = true AND $1 - time >= $2
                 """
                 
-                result = await conn.execute(delete_query)
+                result = await conn.execute(delete_query, current_time, TO_PUBLISH_DELAY_HOURS * 3600)
                 
                 if result:
                     deleted_count = int(result.split()[1])
