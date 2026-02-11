@@ -4,6 +4,7 @@ import logging
 import os
 import json
 from fastapi import FastAPI, Request
+import asyncio  # 👈 ЭТО ДОБАВИТЬ
 import uvicorn
 import threading
 from typing import Optional
