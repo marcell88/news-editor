@@ -3,16 +3,15 @@ import aiohttp
 import asyncio
 import logging
 import os
-import ssl
 from aiohttp import web
 from services.previewer import PreviewerService
 
 logger = logging.getLogger(__name__)
 
 class ReactionMonitor:
-    """Обработчик нажатий кнопок через HTTPS вебхук."""
+    """Обработчик нажатий кнопок через HTTP (nginx дает HTTPS)."""
     
-    WEBHOOK_PORT = 8443  # Telegram рекомендует 8443, 443, 80, 88
+    WEBHOOK_PORT = 8081  # ⚠️ МЕНЯЕМ НА 8081
     
     def __init__(self):
         self.bot_token = os.getenv('PUBLISH_API')
@@ -79,18 +78,16 @@ class ReactionMonitor:
         return web.json_response({"status": "ok", "service": "reaction_monitor"})
     
     async def run_monitoring(self):
-        """Запускает HTTPS сервер."""
-        logger.info(f"🚀 Запуск HTTPS вебхук сервера на порту {self.WEBHOOK_PORT}")
-        
-        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        ssl_context.load_cert_chain('/home/markell/ssl/cert.pem', '/home/markell/ssl/key.pem')
+        """Запускает HTTP сервер (без SSL)."""
+        logger.info(f"🚀 Запуск HTTP вебхук сервера на порту {self.WEBHOOK_PORT}")
         
         runner = web.AppRunner(self.app)
         await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', self.WEBHOOK_PORT, ssl_context=ssl_context)
+        site = web.TCPSite(runner, '0.0.0.0', self.WEBHOOK_PORT)  # ⚠️ УБРАЛ SSL
         await site.start()
         
-        logger.info(f"✅ HTTPS сервер запущен на https://51.250.103.170:{self.WEBHOOK_PORT}/webhook/telegram")
+        logger.info(f"✅ HTTP сервер запущен на http://0.0.0.0:{self.WEBHOOK_PORT}/webhook/telegram")
+        logger.info(f"📡 Nginx проксирует https://server.10pages.tech → http://127.0.0.1:{self.WEBHOOK_PORT}")
         
         while True:
             await asyncio.sleep(3600)
