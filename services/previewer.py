@@ -193,39 +193,30 @@ class PreviewerService:
                     result += f"\n\n\\=\\=\\=\n\n{escaped_time}"
         
         return result
-        
+            
     async def _send_to_telegram(self, pic_base64: str, caption: str, record_id: int) -> bool:
         """Отправляет фото с текстом и двумя кнопками в Telegram."""
         try:
             # Декодируем изображение
             photo_data = base64.b64decode(pic_base64)
             
-            # 🔥 ПРОСТЫЕ ТЕКСТОВЫЕ КНОПКИ БЕЗ ЭМОДЗИ
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                # Первая кнопка
-                [
-                    InlineKeyboardButton(
-                        text="Картинка",  # Без эмодзи
-                        callback_data=f"btn_image_{record_id}"
-                    )
-                ],
-                # Пустой ряд для отступа
-                [],
-                # Вторая кнопка
-                [
-                    InlineKeyboardButton(
-                        text="Пост",  # Без эмодзи
-                        callback_data=f"btn_post_{record_id}"
-                    )
+            # 🔥 МАКСИМАЛЬНО ПРОСТЫЕ КНОПКИ
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "Картинка", "callback_data": f"btn_image_{record_id}"}],
+                    [{"text": "Пост", "callback_data": f"btn_post_{record_id}"}]
                 ]
-            ])
+            }
+            
+            # Отступ между кнопками делаем пустой строкой в caption
+            caption_with_gap = f"{caption}\n\n"  # Два переноса перед кнопками
             
             # Формируем запрос
             form = aiohttp.FormData()
             form.add_field('chat_id', self.preview_group)
-            form.add_field('caption', caption)
+            form.add_field('caption', caption_with_gap)
             form.add_field('parse_mode', 'MarkdownV2')
-            form.add_field('reply_markup', keyboard.model_dump_json())
+            form.add_field('reply_markup', json.dumps(keyboard))  # Простой JSON
             form.add_field('photo', photo_data, filename='image.jpg', content_type='image/jpeg')
             
             url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
@@ -237,9 +228,6 @@ class PreviewerService:
                     if response.status == 200 and result.get('ok'):
                         message_id = result['result']['message_id']
                         logger.info(f"✅ Отправлено! ID записи: {record_id}, ID сообщения: {message_id}")
-                        
-                        await self._save_message_mapping(message_id, record_id, caption)
-                        
                         return True
                     else:
                         logger.error(f"❌ Ошибка отправки записи {record_id}: {result}")
