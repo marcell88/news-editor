@@ -211,7 +211,7 @@ class PainterService:
                     query = """
                     UPDATE to_publish 
                     SET 
-                        pic = true
+                        pic = false
                     WHERE id = $1
                     """
                     await conn.execute(query, record_id)
