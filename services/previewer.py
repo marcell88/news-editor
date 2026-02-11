@@ -5,12 +5,12 @@ import base64
 import os
 import time
 import aiohttp
+import json  # 👈 ДОБАВЛЕНО
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.database import Database
 
@@ -200,7 +200,7 @@ class PreviewerService:
             # Декодируем изображение
             photo_data = base64.b64decode(pic_base64)
             
-            # 🔥 МАКСИМАЛЬНО ПРОСТЫЕ КНОПКИ
+            # 👇 ПРОСТЫЕ КНОПКИ - КАРТИНКА СВЕРХУ, ПОСТ СНИЗУ
             keyboard = {
                 "inline_keyboard": [
                     [{"text": "Картинка", "callback_data": f"btn_image_{record_id}"}],
@@ -208,15 +208,12 @@ class PreviewerService:
                 ]
             }
             
-            # Отступ между кнопками делаем пустой строкой в caption
-            caption_with_gap = f"{caption}\n\n"  # Два переноса перед кнопками
-            
             # Формируем запрос
             form = aiohttp.FormData()
             form.add_field('chat_id', self.preview_group)
-            form.add_field('caption', caption_with_gap)
+            form.add_field('caption', caption)  # БЕЗ лишних переносов
             form.add_field('parse_mode', 'MarkdownV2')
-            form.add_field('reply_markup', json.dumps(keyboard))  # Простой JSON
+            form.add_field('reply_markup', json.dumps(keyboard))
             form.add_field('photo', photo_data, filename='image.jpg', content_type='image/jpeg')
             
             url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
@@ -228,6 +225,10 @@ class PreviewerService:
                     if response.status == 200 and result.get('ok'):
                         message_id = result['result']['message_id']
                         logger.info(f"✅ Отправлено! ID записи: {record_id}, ID сообщения: {message_id}")
+                        
+                        # Сохраняем связь для обработчика кнопок
+                        await self._save_message_mapping(message_id, record_id, caption)
+                        
                         return True
                     else:
                         logger.error(f"❌ Ошибка отправки записи {record_id}: {result}")
@@ -237,7 +238,6 @@ class PreviewerService:
             logger.error(f"❌ Ошибка при отправке в Telegram: {e}")
             return False
     
-    # 🔥 НОВЫЙ МЕТОД: Сохраняем связь message_id -> record_id
     async def _save_message_mapping(self, message_id: int, record_id: int, caption: str):
         """Сохраняет соответствие message_id и record_id в БД."""
         try:
@@ -265,25 +265,13 @@ class PreviewerService:
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения маппинга: {e}")
     
-    # 🔥 НОВЫЙ МЕТОД: Получаем caption по message_id
     async def get_caption_by_message_id(self, message_id: int) -> Optional[str]:
         """Получает текст поста по message_id из БД."""
         try:
             pool = await Database.get_pool()
             async with pool.acquire() as conn:
-                # Сначала ищем в message_mapping
                 row = await conn.fetchrow("""
                     SELECT caption FROM message_mapping WHERE message_id = $1
-                """, message_id)
-                
-                if row and row['caption']:
-                    return row['caption']
-                
-                # Если нет в mapping, ищем через record_id
-                row = await conn.fetchrow("""
-                    SELECT m.caption FROM message_mapping m
-                    JOIN to_publish t ON t.id = m.record_id
-                    WHERE m.message_id = $1
                 """, message_id)
                 
                 return row['caption'] if row else None
