@@ -20,7 +20,7 @@ class PainterService:
     
     def __init__(self):
         self.check_interval = 10  # секунд между проверками
-        self.webhook_url = "https://process-app-marcell88.amvera.io/webhook/7a98c38a-61de-47f7-a606-9a330a194f0d"
+        self.webhook_url = "https://n8n-tg-marcell88.amvera.io/webhook/7a98c38a-61de-47f7-a606-9a330a194f0d"
         self.max_retries = 3
         self.retry_delay = 2  # секунды
         
