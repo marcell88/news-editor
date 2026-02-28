@@ -203,6 +203,7 @@ class PreviewerService:
             # 👇 ПРОСТЫЕ КНОПКИ - КАРТИНКА СВЕРХУ, ПОСТ СНИЗУ
             keyboard = {
                 "inline_keyboard": [
+                    [{"text": "Отправить", "callback_data": f"btn_publish_{record_id}"}],
                     [{"text": "Картинка", "callback_data": f"btn_image_{record_id}"}],
                     [{"text": "Пост", "callback_data": f"btn_post_{record_id}"}]
                 ]
