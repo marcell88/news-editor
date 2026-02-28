@@ -1,4 +1,4 @@
-# app.py (полная версия со всеми службами, включая Cleaner)
+# app.py (полная версия со всеми службами)
 import asyncio
 import logging
 import signal
@@ -16,7 +16,8 @@ from services.preparator import PreparatorService
 from services.previewer import PreviewerService
 from services.reaction_monitor import ReactionMonitor
 from services.publisher import PublisherService
-from services.cleaner import CleanerService  # Добавили службу очистки
+from services.cleaner import CleanerService
+from services.st_catcher import STCatcher  # НОВАЯ СЛУЖБА
 
 # Настраиваем логирование для точки входа.
 logging.basicConfig(
@@ -32,10 +33,11 @@ ENABLE_CALCULATOR = True       # Calculator Service (итоговые оценк
 ENABLE_PLANNER = True          # Planner Service (планировщик) - постоянно
 ENABLE_PAINTER = True          # Painter Service (генерация изображений) - постоянно
 ENABLE_PREPARATOR = True       # Preparator Service (подготовка текстов) - постоянно
-ENABLE_PREVIEWER = True       # Previewer Service (публикация в preview группу)
+ENABLE_PREVIEWER = True        # Previewer Service (публикация в preview группу)
 ENABLE_REACTION_MONITOR = False  # Reaction Monitor (мониторинг реакций)
 ENABLE_PUBLISHER = True        # Publisher Service (прямая публикация в группу)
-ENABLE_CLEANER = True          # Cleaner Service (очистка БД) - НОВАЯ СЛУЖБА
+ENABLE_CLEANER = True          # Cleaner Service (очистка БД)
+ENABLE_ST_CATCHER = True       # ST-Catcher служба (краткосрочный анализ) - НОВАЯ
 # =================================
 
 class ServiceManager:
@@ -83,7 +85,10 @@ class ServiceManager:
             self.services["publisher_service"] = PublisherService()
         
         if ENABLE_CLEANER:
-            self.services["cleaner_service"] = CleanerService()  # НОВАЯ СЛУЖБА
+            self.services["cleaner_service"] = CleanerService()
+        
+        if ENABLE_ST_CATCHER:  # НОВАЯ СЛУЖБА
+            self.services["st_catcher"] = STCatcher()
         
         # Обработка сигналов остановки
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -138,8 +143,11 @@ class ServiceManager:
         if ENABLE_PUBLISHER and "publisher_service" in self.services:
             services_tasks.append(("Publisher-Service", self._run_publisher_service))
         
-        if ENABLE_CLEANER and "cleaner_service" in self.services:  # НОВАЯ СЛУЖБА
+        if ENABLE_CLEANER and "cleaner_service" in self.services:
             services_tasks.append(("Cleaner-Service", self._run_cleaner_service))
+        
+        if ENABLE_ST_CATCHER and "st_catcher" in self.services:  # НОВАЯ СЛУЖБА
+            services_tasks.append(("ST-Catcher", self._run_st_catcher))
         
         if not services_tasks:
             logging.warning("⚠️ Нет активных фоновых служб.")
@@ -244,10 +252,20 @@ class ServiceManager:
             logging.error(f"❌ Ошибка в службе {name}: {e}")
 
     async def _run_cleaner_service(self, name: str):
-        """Запускает Cleaner Service (НОВАЯ СЛУЖБА)."""
+        """Запускает Cleaner Service."""
         try:
             logging.info(f"🚀 Запуск службы {name}...")
             await self.services["cleaner_service"].run_monitoring()
+        except asyncio.CancelledError:
+            logging.info(f"Служба {name} остановлена")
+        except Exception as e:
+            logging.error(f"❌ Ошибка в службе {name}: {e}")
+
+    async def _run_st_catcher(self, name: str):  # НОВАЯ СЛУЖБА
+        """Запускает ST-Catcher службу."""
+        try:
+            logging.info(f"🚀 Запуск службы {name}...")
+            await self.services["st_catcher"].run_monitoring()
         except asyncio.CancelledError:
             logging.info(f"Служба {name} остановлена")
         except Exception as e:
@@ -323,7 +341,8 @@ class ServiceManager:
         logging.info(f"    Previewer Service: {'✅ ВКЛЮЧЕН' if ENABLE_PREVIEWER else '❌ ВЫКЛЮЧЕН'}")
         logging.info(f"    Reaction Monitor: {'✅ ВКЛЮЧЕН' if ENABLE_REACTION_MONITOR else '❌ ВЫКЛЮЧЕН'}")
         logging.info(f"    Publisher Service: {'✅ ВКЛЮЧЕН' if ENABLE_PUBLISHER else '❌ ВЫКЛЮЧЕН'}")
-        logging.info(f"    Cleaner Service: {'✅ ВКЛЮЧЕН' if ENABLE_CLEANER else '❌ ВЫКЛЮЧЕН'}")  # НОВАЯ СЛУЖБА
+        logging.info(f"    Cleaner Service: {'✅ ВКЛЮЧЕН' if ENABLE_CLEANER else '❌ ВЫКЛЮЧЕН'}")
+        logging.info(f"    ST-Catcher Service: {'✅ ВКЛЮЧЕН' if ENABLE_ST_CATCHER else '❌ ВЫКЛЮЧЕН'}")  # НОВАЯ СЛУЖБА
         logging.info("=" * 60)
     
     def _log_tasks_statistics(self):
@@ -335,7 +354,7 @@ class ServiceManager:
                     status = "отменена"
                 else:
                     try:
-                        task.result()  # Проверяем исключения
+                        task.result()
                         status = "завершена успешно"
                     except Exception as e:
                         status = f"завершена с ошибкой: {e}"
@@ -362,7 +381,8 @@ def start_application():
     logging.info(f"    Previewer: {'✅ ВКЛЮЧЕН' if ENABLE_PREVIEWER else '❌ ВЫКЛЮЧЕН'}")
     logging.info(f"    Reaction Monitor: {'✅ ВКЛЮЧЕН' if ENABLE_REACTION_MONITOR else '❌ ВЫКЛЮЧЕН'}")
     logging.info(f"    Publisher: {'✅ ВКЛЮЧЕН' if ENABLE_PUBLISHER else '❌ ВЫКЛЮЧЕН'}")
-    logging.info(f"    Cleaner: {'✅ ВКЛЮЧЕН' if ENABLE_CLEANER else '❌ ВЫКЛЮЧЕН'}")  # НОВАЯ СЛУЖБА
+    logging.info(f"    Cleaner: {'✅ ВКЛЮЧЕН' if ENABLE_CLEANER else '❌ ВЫКЛЮЧЕН'}")
+    logging.info(f"    ST-Catcher: {'✅ ВКЛЮЧЕН' if ENABLE_ST_CATCHER else '❌ ВЫКЛЮЧЕН'}")  # НОВАЯ СЛУЖБА
     logging.info("=" * 60)
     
     # Проверяем, что хотя бы одна служба включена
@@ -375,7 +395,8 @@ def start_application():
         ENABLE_PREVIEWER,
         ENABLE_REACTION_MONITOR,
         ENABLE_PUBLISHER,
-        ENABLE_CLEANER  # ДОБАВЛЕНО
+        ENABLE_CLEANER,
+        ENABLE_ST_CATCHER  # ДОБАВЛЕНО
     ]
     
     if not any(enabled_services):
