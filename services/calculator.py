@@ -37,6 +37,7 @@ class CalculatorService:
         mt_author_val = os.getenv("MT_AUTHOR_WEIGHT")
         time_best_val = os.getenv("TIME_BEST_WEIGHT")
         time_expire_val = os.getenv("TIME_EXPIRE_WEIGHT")
+        st_weight_val = os.getenv("ST_WEIGHT")  # НОВОЕ
         
         logger.info("CalculatorService: Значения из переменных окружения:")
         logger.info(f"  LT_TOPIC_WEIGHT: '{lt_topic_val}'")
@@ -46,6 +47,7 @@ class CalculatorService:
         logger.info(f"  MT_AUTHOR_WEIGHT: '{mt_author_val}'")
         logger.info(f"  TIME_BEST_WEIGHT: '{time_best_val}'")
         logger.info(f"  TIME_EXPIRE_WEIGHT: '{time_expire_val}'")
+        logger.info(f"  ST_WEIGHT: '{st_weight_val}'")  # НОВОЕ
         
         # Выводим все переменные окружения для отладки
         all_env_vars = dict(os.environ)
@@ -53,13 +55,14 @@ class CalculatorService:
         
         # Устанавливаем веса с значениями по умолчанию
         self.weights = {
-            "lt_topic": float(lt_topic_val) if lt_topic_val else 0.15,
-            "lt_mood": float(lt_mood_val) if lt_mood_val else 0.15,
+            "lt_topic": float(lt_topic_val) if lt_topic_val else 0.10,
+            "lt_mood": float(lt_mood_val) if lt_mood_val else 0.10,
             "mt_topic": float(mt_topic_val) if mt_topic_val else 0.15,
             "mt_mood": float(mt_mood_val) if mt_mood_val else 0.15,
             "mt_author": float(mt_author_val) if mt_author_val else 0.15,
             "time_best": float(time_best_val) if time_best_val else 0.20,
             "time_expire": float(time_expire_val) if time_expire_val else 0.05,
+            "st_score": float(st_weight_val) if st_weight_val else 0.10,  # НОВОЕ (вес ST)
         }
         
         # Логируем итоговые веса
@@ -101,16 +104,17 @@ class CalculatorService:
             logger.error(f"Ошибка в _check_and_calculate: {e}")
     
     async def _get_ready_records(self, pool) -> List[Dict]:
-        """Получаем записи, готовые для расчета"""
+        """Получаем записи, готовые для расчета (все оценки проставлены)"""
         try:
             async with pool.acquire() as conn:
                 query = """
                 SELECT id, 
                        "lt-topic", "lt-mood",
                        "mt-topic", "mt-mood", "mt-author",
-                       "time-best", "time-expire"
+                       "time-best", "time-expire",
+                       "st-score"  -- НОВОЕ: добавляем ST-оценку
                 FROM editor 
-                WHERE lt = true AND mt = true AND time = true 
+                WHERE lt = true AND mt = true AND time = true AND st = true  -- ИЗМЕНЕНО: добавили st = true
                   AND analyzed = false
                 ORDER BY id
                 """
@@ -151,12 +155,18 @@ class CalculatorService:
             logger.info(f"  mt-author: {record.get('mt-author')}")
             logger.info(f"  time-best: {record.get('time-best')}")
             logger.info(f"  time-expire: {record.get('time-expire')}")
+            logger.info(f"  st-score: {record.get('st-score')}")  # НОВОЕ
             
             # Шаг 2: Собираем оценки
             scores = {}
             logger.info("📊 Преобразование значений в числа:")
             for key in self.weights.keys():
-                db_key = key.replace('_', '-')
+                # Преобразуем ключ в формат БД
+                if key == "st_score":
+                    db_key = "st-score"
+                else:
+                    db_key = key.replace('_', '-')
+                
                 value = record.get(db_key)
                 
                 try:
