@@ -130,6 +130,9 @@ class PublisherService:
             # Помечаем как опубликованную В to_publish
             await self._mark_as_published(pool, record_id)
             
+            # СБРАСЫВАЕМ st = false В ТАБЛИЦЕ editor ПОСЛЕ УСПЕШНОЙ ПУБЛИКАЦИИ
+            await self._reset_st_in_editor(pool)
+            
             logger.info(f"✅ Опубликовано ID {record_id}, next={next_flag}")
             return True
             
@@ -215,6 +218,26 @@ class PublisherService:
         except Exception as e:
             logger.error(f"❌ Ошибка обновления: {e}")
             raise
+    
+    async def _reset_st_in_editor(self, pool):
+        """Сбрасывает st = false для всех записей в таблице editor."""
+        try:
+            async with pool.acquire() as conn:
+                # Обновляем все записи: st = false
+                # При этом st-score НЕ сбрасываем, только флаг
+                result = await conn.execute("""
+                UPDATE editor 
+                SET st = false
+                WHERE st = true  -- Только те, у которых сейчас true
+                """)
+                
+                # Получаем количество обновленных строк
+                # В asyncpg result это строка типа "UPDATE X"
+                logger.info(f"🔄 Сброс st=false в editor: {result}")
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка сброса st в editor: {e}")
+            # Не raise, чтобы не прерывать публикацию
 
 
 async def main():
